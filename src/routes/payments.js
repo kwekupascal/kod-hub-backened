@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { requireFirebaseUser } = require('../lib/auth');
 const { db, admin } = require('../lib/firebase');
 const { ensureWallet, creditWalletIfNeeded } = require('../services/wallets');
@@ -19,6 +20,20 @@ function generateOrderReference(prefixValue) {
   const short = now.slice(-10);
   const prefix = String(prefixValue || 'ORD').toUpperCase().replace(/\s+/g, '');
   return `ORD-${prefix}-${short}`;
+}
+
+function verifyWebhookSignature(req) {
+  const secret = process.env.PAYSTACK_SECRET_KEY || '';
+  const signature = req.headers['x-paystack-signature'];
+
+  if (!secret || !signature) return false;
+
+  const hash = crypto
+    .createHmac('sha512', secret)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+
+  return hash === signature;
 }
 
 async function createDataOrderIfNeeded({ paymentId }) {
@@ -114,6 +129,73 @@ async function createAfaOrderIfNeeded({ paymentId }) {
     });
   });
 }
+
+async function processSuccessfulPayment({ paymentId }) {
+  const paymentRef = db().collection('payments').doc(paymentId);
+  const paymentSnap = await paymentRef.get();
+  if (!paymentSnap.exists) return;
+
+  const payment = paymentSnap.data();
+
+  if (payment.type === 'WALLET_FUNDING' && payment.walletCreditApplied !== true) {
+    await creditWalletIfNeeded({ paymentId });
+  }
+
+  if (payment.type === 'DATA_PURCHASE') {
+    await createDataOrderIfNeeded({ paymentId });
+  }
+
+  if (payment.type === 'AFA_PURCHASE') {
+    await createAfaOrderIfNeeded({ paymentId });
+  }
+}
+
+router.post('/webhook/paystack', async (req, res) => {
+  try {
+    if (!verifyWebhookSignature(req)) {
+      return res.status(401).send('Invalid signature');
+    }
+
+    res.sendStatus(200);
+
+    const event = req.body || {};
+    if (event.event !== 'charge.success') return;
+
+    const reference = event.data?.reference;
+    if (!reference) return;
+
+    const paymentsQuery = await db()
+      .collection('payments')
+      .where('clientReference', '==', reference)
+      .limit(1)
+      .get();
+
+    if (paymentsQuery.empty) return;
+
+    const paymentDoc = paymentsQuery.docs[0];
+    const paymentId = paymentDoc.id;
+
+    const verification = await verifyPaystackPayment({ reference });
+
+    await db().collection('payments').doc(paymentId).set({
+      providerReference: verification.providerReference || reference,
+      providerTransactionId: verification.providerTransactionId || '',
+      status: verification.status,
+      message: verification.message || '',
+      failureReason:
+        verification.status === 'FAILED'
+          ? (verification.message || 'Payment failed')
+          : '',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    if (verification.status === 'SUCCESS') {
+      await processSuccessfulPayment({ paymentId });
+    }
+  } catch (error) {
+    console.error('Webhook handling failed:', error.response?.data || error);
+  }
+});
 
 router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
   try {
@@ -447,16 +529,8 @@ router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
-    if (verification.status === 'SUCCESS' && payment.type === 'WALLET_FUNDING' && payment.walletCreditApplied !== true) {
-      await creditWalletIfNeeded({ paymentId });
-    }
-
-    if (verification.status === 'SUCCESS' && payment.type === 'DATA_PURCHASE') {
-      await createDataOrderIfNeeded({ paymentId });
-    }
-
-    if (verification.status === 'SUCCESS' && payment.type === 'AFA_PURCHASE') {
-      await createAfaOrderIfNeeded({ paymentId });
+    if (verification.status === 'SUCCESS') {
+      await processSuccessfulPayment({ paymentId });
     }
 
     const freshSnap = await paymentRef.get();
