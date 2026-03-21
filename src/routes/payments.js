@@ -22,6 +22,18 @@ function generateOrderReference(prefixValue) {
   return `ORD-${prefix}-${short}`;
 }
 
+function roundMoney(value) {
+  return Number(Number(value).toFixed(2));
+}
+
+function calculatePaystackCharge(amount) {
+  return roundMoney(Number(amount) * 0.03);
+}
+
+function calculateTotalPayable(amount) {
+  return roundMoney(Number(amount) + calculatePaystackCharge(amount));
+}
+
 function verifyWebhookSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY || '';
   const signature = req.headers['x-paystack-signature'];
