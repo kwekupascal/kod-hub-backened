@@ -22,19 +22,26 @@ async function initializePaystackWalletCharge({
   amount,
   clientReference,
   callbackUrl,
-  metadata
+  metadata,
+  channels
 }) {
   const baseUrl = process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co';
 
+  const payload = {
+    email,
+    amount: Math.round(Number(amount) * 100),
+    reference: clientReference,
+    callback_url: callbackUrl,
+    metadata
+  };
+
+  if (Array.isArray(channels) && channels.length > 0) {
+    payload.channels = channels;
+  }
+
   const response = await axios.post(
     `${baseUrl}/transaction/initialize`,
-    {
-      email,
-      amount: Math.round(Number(amount) * 100),
-      reference: clientReference,
-      callback_url: callbackUrl,
-      metadata
-    },
+    payload,
     {
       headers: getPaystackHeaders()
     }
