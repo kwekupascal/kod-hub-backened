@@ -218,6 +218,9 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
     }
 
     const parsedAmount = Number(amount);
+    const baseAmount = roundMoney(parsedAmount);
+const chargeAmount = calculatePaystackCharge(baseAmount);
+const totalPayableAmount = calculateTotalPayable(baseAmount);
     if (!parsedAmount || parsedAmount <= 0) {
       return res.status(400).json({ ok: false, message: 'Amount must be greater than zero' });
     }
@@ -242,7 +245,9 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
       userId,
       type: 'WALLET_FUNDING',
       provider: 'PAYSTACK',
-      amount: parsedAmount,
+      amount: baseAmount,
+chargeAmount,
+payableAmount: totalPayableAmount,
       currency: 'GHS',
       customerName: userRecord.displayName || '',
       customerEmail: userRecord.email || '',
@@ -269,7 +274,7 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
-      amount: parsedAmount,
+      amount: totalPayableAmount,
       clientReference,
       callbackUrl,
       metadata: {
@@ -337,7 +342,9 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
       userId,
       type: 'DATA_PURCHASE',
       provider: 'PAYSTACK',
-      amount: parsedAmount,
+      amount: baseAmount,
+chargeAmount,
+payableAmount: totalPayableAmount,
       currency: 'GHS',
       customerName: userRecord.displayName || '',
       customerEmail: userRecord.email || '',
@@ -368,7 +375,7 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
-      amount: parsedAmount,
+      amount: totalPayableAmount,
       clientReference,
       callbackUrl,
       metadata: {
@@ -438,7 +445,9 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
       userId,
       type: 'AFA_PURCHASE',
       provider: 'PAYSTACK',
-      amount: parsedAmount,
+      amount: baseAmount,
+chargeAmount,
+payableAmount: totalPayableAmount,
       currency: 'GHS',
       customerName: userRecord.displayName || fullName || '',
       customerEmail: userRecord.email || '',
@@ -470,7 +479,7 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
-      amount: parsedAmount,
+      amount: totalPayableAmount,
       clientReference,
       callbackUrl,
       metadata: {
