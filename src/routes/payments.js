@@ -218,12 +218,13 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
     }
 
     const parsedAmount = Number(amount);
-    const baseAmount = roundMoney(parsedAmount);
-const chargeAmount = calculatePaystackCharge(baseAmount);
-const totalPayableAmount = calculateTotalPayable(baseAmount);
     if (!parsedAmount || parsedAmount <= 0) {
       return res.status(400).json({ ok: false, message: 'Amount must be greater than zero' });
     }
+
+    const baseAmount = roundMoney(parsedAmount);
+    const chargeAmount = calculatePaystackCharge(baseAmount);
+    const totalPayableAmount = calculateTotalPayable(baseAmount);
 
     if (!/^[0-9]{10,15}$/.test(String(phoneNumber || '').trim())) {
       return res.status(400).json({ ok: false, message: 'Invalid phone number' });
@@ -246,8 +247,8 @@ const totalPayableAmount = calculateTotalPayable(baseAmount);
       type: 'WALLET_FUNDING',
       provider: 'PAYSTACK',
       amount: baseAmount,
-chargeAmount,
-payableAmount: totalPayableAmount,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
       currency: 'GHS',
       customerName: userRecord.displayName || '',
       customerEmail: userRecord.email || '',
@@ -283,7 +284,10 @@ payableAmount: totalPayableAmount,
         type: 'WALLET_FUNDING',
         phoneNumber: String(phoneNumber).trim(),
         network: String(network || '').trim(),
-        trackingId
+        trackingId,
+        baseAmount,
+        chargeAmount,
+        payableAmount: totalPayableAmount
       }
     });
 
@@ -301,6 +305,9 @@ payableAmount: totalPayableAmount,
       paymentId: paymentRef.id,
       status: paystackResponse.status || 'PENDING',
       clientReference,
+      amount: baseAmount,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
       authorizationUrl: paystackResponse.authorizationUrl || '',
       accessCode: paystackResponse.accessCode || '',
       message: paystackResponse.message || 'Payment initialized successfully.'
@@ -327,6 +334,10 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
       return res.status(400).json({ ok: false, message: 'Amount must be greater than zero' });
     }
 
+    const baseAmount = roundMoney(parsedAmount);
+    const chargeAmount = calculatePaystackCharge(baseAmount);
+    const totalPayableAmount = calculateTotalPayable(baseAmount);
+
     if (!/^[0-9]{10,15}$/.test(String(phoneNumber || '').trim())) {
       return res.status(400).json({ ok: false, message: 'Invalid phone number' });
     }
@@ -343,8 +354,8 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
       type: 'DATA_PURCHASE',
       provider: 'PAYSTACK',
       amount: baseAmount,
-chargeAmount,
-payableAmount: totalPayableAmount,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
       currency: 'GHS',
       customerName: userRecord.displayName || '',
       customerEmail: userRecord.email || '',
@@ -386,7 +397,10 @@ payableAmount: totalPayableAmount,
         network: String(network || '').trim(),
         bundleLabel: String(bundleLabel || '').trim(),
         bundleValue: String(bundleValue || '').trim(),
-        trackingId
+        trackingId,
+        baseAmount,
+        chargeAmount,
+        payableAmount: totalPayableAmount
       }
     });
 
@@ -404,6 +418,9 @@ payableAmount: totalPayableAmount,
       paymentId: paymentRef.id,
       status: paystackResponse.status || 'PENDING',
       clientReference,
+      amount: baseAmount,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
       authorizationUrl: paystackResponse.authorizationUrl || '',
       accessCode: paystackResponse.accessCode || '',
       message: 'Authorization URL created'
@@ -430,6 +447,10 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
       return res.status(400).json({ ok: false, message: 'Amount must be greater than zero' });
     }
 
+    const baseAmount = roundMoney(parsedAmount);
+    const chargeAmount = calculatePaystackCharge(baseAmount);
+    const totalPayableAmount = calculateTotalPayable(baseAmount);
+
     if (!/^[0-9]{10,15}$/.test(String(phoneNumber || '').trim())) {
       return res.status(400).json({ ok: false, message: 'Invalid phone number' });
     }
@@ -446,8 +467,8 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
       type: 'AFA_PURCHASE',
       provider: 'PAYSTACK',
       amount: baseAmount,
-chargeAmount,
-payableAmount: totalPayableAmount,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
       currency: 'GHS',
       customerName: userRecord.displayName || fullName || '',
       customerEmail: userRecord.email || '',
@@ -490,7 +511,10 @@ payableAmount: totalPayableAmount,
         fullName: String(fullName || '').trim(),
         ghaCardNumber: String(ghaCardNumber || '').trim(),
         town: String(town || '').trim(),
-        trackingId
+        trackingId,
+        baseAmount,
+        chargeAmount,
+        payableAmount: totalPayableAmount
       }
     });
 
@@ -508,6 +532,9 @@ payableAmount: totalPayableAmount,
       paymentId: paymentRef.id,
       status: paystackResponse.status || 'PENDING',
       clientReference,
+      amount: baseAmount,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
       authorizationUrl: paystackResponse.authorizationUrl || '',
       accessCode: paystackResponse.accessCode || '',
       message: 'Authorization URL created'
