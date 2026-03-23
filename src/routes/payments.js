@@ -211,7 +211,7 @@ router.post('/webhook/paystack', async (req, res) => {
 
 router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
   try {
-    const { userId, amount, phoneNumber, network } = req.body;
+    const { userId, amount } = req.body;
 
     if (!userId || req.user.uid !== userId) {
       return res.status(403).json({ ok: false, message: 'User mismatch' });
@@ -225,10 +225,6 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
     const baseAmount = roundMoney(parsedAmount);
     const chargeAmount = calculatePaystackCharge(baseAmount);
     const totalPayableAmount = calculateTotalPayable(baseAmount);
-
-    if (!/^[0-9]{10,15}$/.test(String(phoneNumber || '').trim())) {
-      return res.status(400).json({ ok: false, message: 'Invalid phone number' });
-    }
 
     const userRecord = await admin.auth().getUser(userId);
     await ensureWallet({
@@ -252,8 +248,8 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
       currency: 'GHS',
       customerName: userRecord.displayName || '',
       customerEmail: userRecord.email || '',
-      phoneNumber: String(phoneNumber).trim(),
-      network: String(network || '').trim(),
+      phoneNumber: '',
+      network: '',
       clientReference,
       providerReference: '',
       providerTransactionId: '',
@@ -282,8 +278,6 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
         userId,
         paymentId: paymentRef.id,
         type: 'WALLET_FUNDING',
-        phoneNumber: String(phoneNumber).trim(),
-        network: String(network || '').trim(),
         trackingId,
         paymentChannel: 'general',
         baseAmount,
