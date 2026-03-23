@@ -285,6 +285,7 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
         phoneNumber: String(phoneNumber).trim(),
         network: String(network || '').trim(),
         trackingId,
+        paymentChannel: 'general',
         baseAmount,
         chargeAmount,
         payableAmount: totalPayableAmount
@@ -389,6 +390,7 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
       amount: totalPayableAmount,
       clientReference,
       callbackUrl,
+      channels: ['mobile_money'],
       metadata: {
         userId,
         paymentId: paymentRef.id,
@@ -398,6 +400,7 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
         bundleLabel: String(bundleLabel || '').trim(),
         bundleValue: String(bundleValue || '').trim(),
         trackingId,
+        paymentChannel: 'mobile_money',
         baseAmount,
         chargeAmount,
         payableAmount: totalPayableAmount
@@ -503,6 +506,7 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
       amount: totalPayableAmount,
       clientReference,
       callbackUrl,
+      channels: ['mobile_money'],
       metadata: {
         userId,
         paymentId: paymentRef.id,
@@ -512,6 +516,7 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
         ghaCardNumber: String(ghaCardNumber || '').trim(),
         town: String(town || '').trim(),
         trackingId,
+        paymentChannel: 'mobile_money',
         baseAmount,
         chargeAmount,
         payableAmount: totalPayableAmount
