@@ -37,27 +37,18 @@ function calculateTotalPayable(amount) {
 function verifyWebhookSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY || '';
   const signature = req.headers['x-paystack-signature'];
-
   if (!secret || !signature) return false;
-
-  const hash = crypto
-    .createHmac('sha512', secret)
-    .update(JSON.stringify(req.body))
-    .digest('hex');
-
+  const hash = crypto.createHmac('sha512', secret).update(JSON.stringify(req.body)).digest('hex');
   return hash === signature;
 }
 
 async function createDataOrderIfNeeded({ paymentId }) {
   const paymentRef = db().collection('payments').doc(paymentId);
-
   await db().runTransaction(async (transaction) => {
     const paymentSnap = await transaction.get(paymentRef);
     if (!paymentSnap.exists) return;
-
     const payment = paymentSnap.data();
-    if (payment.type !== 'DATA_PURCHASE') return;
-    if (payment.orderCreated === true) return;
+    if (payment.type !== 'DATA_PURCHASE' || payment.orderCreated === true) return;
 
     const orderRef = db().collection('orders').doc();
     const trackingId = payment.trackingId || generateTrackingId();
@@ -77,8 +68,7 @@ async function createDataOrderIfNeeded({ paymentId }) {
       gateway: 'MOBILE_MONEY',
       reference,
       trackingId,
-      message:
-        'Order accepted successfully. Correct GB selected and payment completed successfully.',
+      message: 'Order accepted successfully. Correct GB selected and payment completed successfully.',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -95,14 +85,11 @@ async function createDataOrderIfNeeded({ paymentId }) {
 
 async function createAfaOrderIfNeeded({ paymentId }) {
   const paymentRef = db().collection('payments').doc(paymentId);
-
   await db().runTransaction(async (transaction) => {
     const paymentSnap = await transaction.get(paymentRef);
     if (!paymentSnap.exists) return;
-
     const payment = paymentSnap.data();
-    if (payment.type !== 'AFA_PURCHASE') return;
-    if (payment.orderCreated === true) return;
+    if (payment.type !== 'AFA_PURCHASE' || payment.orderCreated === true) return;
 
     const orderRef = db().collection('orders').doc();
     const trackingId = payment.trackingId || generateTrackingId();
@@ -126,8 +113,7 @@ async function createAfaOrderIfNeeded({ paymentId }) {
       gateway: 'MOBILE_MONEY',
       reference,
       trackingId,
-      message:
-        'AFA registration request accepted successfully. Payment completed successfully.',
+      message: 'AFA registration request accepted successfully. Payment completed successfully.',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
@@ -146,28 +132,18 @@ async function processSuccessfulPayment({ paymentId }) {
   const paymentRef = db().collection('payments').doc(paymentId);
   const paymentSnap = await paymentRef.get();
   if (!paymentSnap.exists) return;
-
   const payment = paymentSnap.data();
 
   if (payment.type === 'WALLET_FUNDING' && payment.walletCreditApplied !== true) {
     await creditWalletIfNeeded({ paymentId });
   }
-
-  if (payment.type === 'DATA_PURCHASE') {
-    await createDataOrderIfNeeded({ paymentId });
-  }
-
-  if (payment.type === 'AFA_PURCHASE') {
-    await createAfaOrderIfNeeded({ paymentId });
-  }
+  if (payment.type === 'DATA_PURCHASE') await createDataOrderIfNeeded({ paymentId });
+  if (payment.type === 'AFA_PURCHASE') await createAfaOrderIfNeeded({ paymentId });
 }
 
 router.post('/webhook/paystack', async (req, res) => {
   try {
-    if (!verifyWebhookSignature(req)) {
-      return res.status(401).send('Invalid signature');
-    }
-
+    if (!verifyWebhookSignature(req)) return res.status(401).send('Invalid signature');
     res.sendStatus(200);
 
     const event = req.body || {};
@@ -176,17 +152,10 @@ router.post('/webhook/paystack', async (req, res) => {
     const reference = event.data?.reference;
     if (!reference) return;
 
-    const paymentsQuery = await db()
-      .collection('payments')
-      .where('clientReference', '==', reference)
-      .limit(1)
-      .get();
-
+    const paymentsQuery = await db().collection('payments').where('clientReference', '==', reference).limit(1).get();
     if (paymentsQuery.empty) return;
 
-    const paymentDoc = paymentsQuery.docs[0];
-    const paymentId = paymentDoc.id;
-
+    const paymentId = paymentsQuery.docs[0].id;
     const verification = await verifyPaystackPayment({ reference });
 
     await db().collection('payments').doc(paymentId).set({
@@ -194,16 +163,11 @@ router.post('/webhook/paystack', async (req, res) => {
       providerTransactionId: verification.providerTransactionId || '',
       status: verification.status,
       message: verification.message || '',
-      failureReason:
-        verification.status === 'FAILED'
-          ? (verification.message || 'Payment failed')
-          : '',
+      failureReason: verification.status === 'FAILED' ? (verification.message || 'Payment failed') : '',
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
-    if (verification.status === 'SUCCESS') {
-      await processSuccessfulPayment({ paymentId });
-    }
+    if (verification.status === 'SUCCESS') await processSuccessfulPayment({ paymentId });
   } catch (error) {
     console.error('Webhook handling failed:', error.response?.data || error);
   }
@@ -212,7 +176,6 @@ router.post('/webhook/paystack', async (req, res) => {
 router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
   try {
     const { userId, amount } = req.body;
-
     if (!userId || req.user.uid !== userId) {
       return res.status(403).json({ ok: false, message: 'User mismatch' });
     }
@@ -265,21 +228,20 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
     });
 
     const callbackBase = process.env.APP_BASE_URL || '';
-    const callbackUrl = callbackBase
-      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
-      : undefined;
+    const callbackUrl = callbackBase ? `${callbackBase}/api/payments/${paymentRef.id}/callback` : undefined;
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
       amount: totalPayableAmount,
       clientReference,
       callbackUrl,
+      channels: ['mobile_money'],
       metadata: {
         userId,
         paymentId: paymentRef.id,
         type: 'WALLET_FUNDING',
         trackingId,
-        paymentChannel: 'general',
+        paymentChannel: 'mobile_money',
         baseAmount,
         chargeAmount,
         payableAmount: totalPayableAmount
@@ -319,7 +281,6 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
 router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
   try {
     const { userId, amount, phoneNumber, network, bundleLabel, bundleValue } = req.body;
-
     if (!userId || req.user.uid !== userId) {
       return res.status(403).json({ ok: false, message: 'User mismatch' });
     }
@@ -375,9 +336,7 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
     });
 
     const callbackBase = process.env.APP_BASE_URL || '';
-    const callbackUrl = callbackBase
-      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
-      : undefined;
+    const callbackUrl = callbackBase ? `${callbackBase}/api/payments/${paymentRef.id}/callback` : undefined;
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
@@ -434,7 +393,6 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
 router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
   try {
     const { userId, amount, phoneNumber, fullName, ghaCardNumber, town } = req.body;
-
     if (!userId || req.user.uid !== userId) {
       return res.status(403).json({ ok: false, message: 'User mismatch' });
     }
@@ -491,9 +449,7 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
     });
 
     const callbackBase = process.env.APP_BASE_URL || '';
-    const callbackUrl = callbackBase
-      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
-      : undefined;
+    const callbackUrl = callbackBase ? `${callbackBase}/api/payments/${paymentRef.id}/callback` : undefined;
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
@@ -552,20 +508,14 @@ router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
     const paymentId = req.params.paymentId;
     const paymentRef = db().collection('payments').doc(paymentId);
     const paymentSnap = await paymentRef.get();
-
-    if (!paymentSnap.exists) {
-      return res.status(404).json({ ok: false, message: 'Payment not found' });
-    }
+    if (!paymentSnap.exists) return res.status(404).json({ ok: false, message: 'Payment not found' });
 
     const payment = paymentSnap.data();
-
     if (payment.userId !== req.user.uid) {
       return res.status(403).json({ ok: false, message: 'Forbidden' });
     }
 
-    const verification = await verifyPaystackPayment({
-      reference: payment.clientReference
-    });
+    const verification = await verifyPaystackPayment({ reference: payment.clientReference });
 
     await paymentRef.set({
       providerReference: verification.providerReference || payment.clientReference,
@@ -576,19 +526,12 @@ router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
 
-    if (verification.status === 'SUCCESS') {
-      await processSuccessfulPayment({ paymentId });
-    }
+    if (verification.status === 'SUCCESS') await processSuccessfulPayment({ paymentId });
 
-    const freshSnap = await paymentRef.get();
-    const fresh = freshSnap.data();
-
+    const fresh = (await paymentRef.get()).data();
     let message = fresh.message || '';
-    if (fresh.status === 'SUCCESS' && fresh.type === 'DATA_PURCHASE') {
-      message = 'Order placed successfully.';
-    } else if (fresh.status === 'SUCCESS' && fresh.type === 'AFA_PURCHASE') {
-      message = 'AFA request submitted successfully.';
-    }
+    if (fresh.status === 'SUCCESS' && fresh.type === 'DATA_PURCHASE') message = 'Order placed successfully.';
+    else if (fresh.status === 'SUCCESS' && fresh.type === 'AFA_PURCHASE') message = 'AFA request submitted successfully.';
 
     return res.json({
       ok: true,

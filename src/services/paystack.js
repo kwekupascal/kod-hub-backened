@@ -5,7 +5,6 @@ function getPaystackHeaders() {
   if (!secretKey) {
     throw new Error('PAYSTACK_SECRET_KEY is missing in .env');
   }
-
   return {
     Authorization: `Bearer ${secretKey}`,
     'Content-Type': 'application/json'
@@ -26,7 +25,6 @@ async function initializePaystackWalletCharge({
   channels
 }) {
   const baseUrl = process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co';
-
   const payload = {
     email,
     amount: Math.round(Number(amount) * 100),
@@ -39,16 +37,11 @@ async function initializePaystackWalletCharge({
     payload.channels = channels;
   }
 
-  const response = await axios.post(
-    `${baseUrl}/transaction/initialize`,
-    payload,
-    {
-      headers: getPaystackHeaders()
-    }
-  );
+  const response = await axios.post(`${baseUrl}/transaction/initialize`, payload, {
+    headers: getPaystackHeaders()
+  });
 
   const data = response.data || {};
-
   if (data.status !== true || !data.data) {
     throw new Error(data.message || 'Failed to initialize Paystack transaction');
   }
@@ -64,13 +57,9 @@ async function initializePaystackWalletCharge({
 
 async function verifyPaystackPayment({ reference }) {
   const baseUrl = process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co';
-
-  const response = await axios.get(
-    `${baseUrl}/transaction/verify/${encodeURIComponent(reference)}`,
-    {
-      headers: getPaystackHeaders()
-    }
-  );
+  const response = await axios.get(`${baseUrl}/transaction/verify/${encodeURIComponent(reference)}`, {
+    headers: getPaystackHeaders()
+  });
 
   const data = response.data || {};
   if (data.status !== true || !data.data) {
@@ -79,15 +68,10 @@ async function verifyPaystackPayment({ reference }) {
 
   const tx = data.data;
   const paystackStatus = String(tx.status || '').toLowerCase();
-
   let mappedStatus = 'PENDING';
-  if (paystackStatus === 'success') {
-    mappedStatus = 'SUCCESS';
-  } else if (paystackStatus === 'failed') {
-    mappedStatus = 'FAILED';
-  } else if (paystackStatus === 'abandoned') {
-    mappedStatus = 'CANCELLED';
-  }
+  if (paystackStatus === 'success') mappedStatus = 'SUCCESS';
+  else if (paystackStatus === 'failed') mappedStatus = 'FAILED';
+  else if (paystackStatus === 'abandoned') mappedStatus = 'CANCELLED';
 
   return {
     status: mappedStatus,
