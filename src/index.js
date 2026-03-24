@@ -3,10 +3,12 @@ const express = require('express');
 const cors = require('cors');
 
 const { initializeFirebase } = require('./lib/firebase');
+const { startAdminOrderNotificationsListener } = require('./services/adminNotifications');
 const paymentsRouter = require('./routes/payments');
 const webhooksRouter = require('./routes/webhooks');
 
 initializeFirebase();
+startAdminOrderNotificationsListener();
 
 const app = express();
 app.use(cors());
