@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { db, admin } = require('./firebase');
+const { db, admin } = require('../lib/firebase');
 
 let listenerStarted = false;
 let listenerUnsubscribe = null;
