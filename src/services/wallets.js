@@ -13,7 +13,7 @@ async function ensureWallet(userInfo) {
       currency: 'GHS',
       isActive: true,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
   }
 
@@ -42,6 +42,10 @@ async function creditWalletIfNeeded({ paymentId }) {
     const walletRef = db().collection('wallets').doc(payment.userId);
     const walletSnap = await tx.get(walletRef);
 
+    const userRef = db().collection('users').doc(payment.userId);
+    const userSnap = await tx.get(userRef);
+    const userData = userSnap.exists ? userSnap.data() : {};
+
     let currentBalance = 0;
     if (walletSnap.exists) {
       currentBalance = Number(walletSnap.data().balance || 0);
@@ -54,16 +58,21 @@ async function creditWalletIfNeeded({ paymentId }) {
         currency: 'GHS',
         isActive: true,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     }
 
-    const nextBalance = currentBalance + Number(payment.amount || 0);
+    const fundedAmount = Number(payment.amount || 0);
+    const nextBalance = currentBalance + fundedAmount;
 
-    tx.set(walletRef, {
-      balance: nextBalance,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    tx.set(
+      walletRef,
+      {
+        balance: nextBalance,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     const txRef = db().collection('wallet_transactions').doc();
     tx.set(txRef, {
@@ -73,19 +82,38 @@ async function creditWalletIfNeeded({ paymentId }) {
       paymentId: payment.paymentId,
       type: 'CREDIT',
       source: 'HUBTEL_MOMO',
-      amount: Number(payment.amount || 0),
+      amount: fundedAmount,
+      balanceBefore: currentBalance,
+      balanceAfter: nextBalance,
       currency: 'GHS',
       status: 'SUCCESS',
       reference: payment.clientReference || '',
       trackingId: payment.trackingId || '',
       message: 'Wallet funded successfully via mobile money.',
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      customerName:
+        payment.customerName ||
+        userData?.fullName ||
+        userData?.displayName ||
+        '',
+      customerEmail: payment.customerEmail || userData?.email || '',
+      phone:
+        payment.phoneNumber ||
+        userData?.phone ||
+        '',
+      customerFundingSmsSent: false,
+      customerFundingSmsSentAt: null,
+      customerFundingSmsStatus: 'PENDING',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    tx.set(paymentRef, {
-      walletCreditApplied: true,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    tx.set(
+      paymentRef,
+      {
+        walletCreditApplied: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     return { alreadyApplied: false, nextBalance };
   });
@@ -93,5 +121,5 @@ async function creditWalletIfNeeded({ paymentId }) {
 
 module.exports = {
   ensureWallet,
-  creditWalletIfNeeded
+  creditWalletIfNeeded,
 };

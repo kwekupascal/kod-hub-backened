@@ -1,15 +1,51 @@
 const axios = require('axios');
 const { db, admin } = require('../lib/firebase');
 
-let listenerStarted = false;
-let listenerUnsubscribe = null;
+let listenersStarted = false;
+let ordersUnsubscribe = null;
+let walletTxUnsubscribe = null;
 
 function money(value) {
   const amount = Number(value || 0);
   return Number.isInteger(amount) ? amount.toFixed(0) : amount.toFixed(2);
 }
 
-function buildNotificationPayload(orderId, order = {}) {
+function normalizePhone(value) {
+  return String(value || '').replace(/[^\d]/g, '').trim();
+}
+
+function isDeliveredStatus(status) {
+  const normalized = String(status || '').trim().toUpperCase();
+  return normalized === 'DELIVERED' || normalized === 'COMPLETED';
+}
+
+async function getUserProfile(userId) {
+  if (!userId) {
+    return {
+      fullName: '',
+      email: '',
+      phone: '',
+    };
+  }
+
+  const userSnap = await db().collection('users').doc(userId).get();
+  if (!userSnap.exists) {
+    return {
+      fullName: '',
+      email: '',
+      phone: '',
+    };
+  }
+
+  const data = userSnap.data() || {};
+  return {
+    fullName: String(data.fullName || data.displayName || '').trim(),
+    email: String(data.email || '').trim(),
+    phone: normalizePhone(data.phone || ''),
+  };
+}
+
+function buildAdminNotificationPayload(orderId, order = {}) {
   const type = String(order.type || 'ORDER').toUpperCase();
   const trackingId = String(order.trackingId || '').trim();
   const amount = `GHS ${money(order.amount)}`;
@@ -53,10 +89,40 @@ function buildNotificationPayload(orderId, order = {}) {
   };
 }
 
+function buildCustomerAcceptedMessage(order = {}, customerName) {
+  const type = String(order.type || '').trim().toUpperCase();
+  const name = customerName || 'Customer';
+
+  if (type === 'AFA') {
+    return `Dear ${name}, your AFA registration request has been received successfully and it's processing.`;
+  }
+
+  const network = String(order.network || 'Network').trim();
+  const bundle = String(order.value || '').trim();
+  return `Dear ${name}, you have successfully placed order for ${network} Data, ${bundle} and it's processing.`;
+}
+
+function buildCustomerDeliveredMessage(order = {}, customerName) {
+  const type = String(order.type || '').trim().toUpperCase();
+  const name = customerName || 'Customer';
+
+  if (type === 'AFA') {
+    return `Dear ${name}, your AFA registration has been delivered successfully.`;
+  }
+
+  const network = String(order.network || 'Network').trim();
+  const bundle = String(order.value || '').trim();
+  return `Dear ${name}, your ${network} ${bundle} Data has been delivered successfully.`;
+}
+
+function buildCustomerFundingMessage({ customerName, amount, balanceAfter }) {
+  const name = customerName || 'Customer';
+  return `Dear ${name}, GHS ${money(amount)} has been credited to your KOD HUB account. Current balance: GHS ${money(balanceAfter)}.`;
+}
+
 function extractProviderMessageInfo(provider, responseData) {
-  const safe = responseData && typeof responseData === 'object'
-    ? responseData
-    : {};
+  const safe =
+    responseData && typeof responseData === 'object' ? responseData : {};
 
   if (provider === 'ARKESEL') {
     const messageId =
@@ -110,16 +176,16 @@ function extractProviderMessageInfo(provider, responseData) {
   };
 }
 
-async function sendAdminSms(message) {
+async function sendSms({ to, message }) {
   const provider = String(process.env.SMS_PROVIDER || 'NONE')
     .trim()
     .toUpperCase();
-  const adminPhone = String(process.env.ADMIN_ALERT_PHONE || '').trim();
+  const recipient = normalizePhone(to);
 
-  if (!adminPhone) {
+  if (!recipient) {
     return {
       skipped: true,
-      reason: 'ADMIN_ALERT_PHONE is not configured',
+      reason: 'Recipient phone is missing',
       provider,
       providerMessageId: '',
       providerReference: '',
@@ -154,7 +220,7 @@ async function sendAdminSms(message) {
       {
         sender,
         message,
-        recipients: [adminPhone],
+        recipients: [recipient],
       },
       {
         headers: {
@@ -192,7 +258,7 @@ async function sendAdminSms(message) {
       baseUrl,
       {
         api_key: apiKey,
-        to: adminPhone,
+        to: recipient,
         from: sender,
         sms: message,
         type: 'plain',
@@ -239,7 +305,7 @@ async function createAdminNotificationForOrder(orderDoc) {
       return { shouldNotify: false };
     }
 
-    const payload = buildNotificationPayload(orderId, freshOrder);
+    const payload = buildAdminNotificationPayload(orderId, freshOrder);
 
     transaction.set(
       notificationRef,
@@ -260,9 +326,7 @@ async function createAdminNotificationForOrder(orderDoc) {
         isRead: false,
         smsStatus: 'PENDING',
         smsProvider: '',
-        smsProviderMessageId: '',
-        smsProviderReference: '',
-        smsResponseRaw: null,
+        smsReason: '',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
@@ -290,7 +354,10 @@ async function createAdminNotificationForOrder(orderDoc) {
   if (!result.shouldNotify) return result;
 
   try {
-    const smsResult = await sendAdminSms(result.payload.smsBody);
+    const smsResult = await sendSms({
+      to: process.env.ADMIN_ALERT_PHONE || '',
+      message: result.payload.smsBody,
+    });
 
     await notificationRef.set(
       {
@@ -312,11 +379,7 @@ async function createAdminNotificationForOrder(orderDoc) {
       {
         smsStatus: 'FAILED',
         smsReason:
-          error.response?.data?.message ||
-          error.message ||
-          'SMS failed',
-        smsProviderMessageId: '',
-        smsProviderReference: '',
+          error.response?.data?.message || error.message || 'SMS failed',
         smsResponseRaw: error.response?.data || null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
@@ -332,28 +395,305 @@ async function createAdminNotificationForOrder(orderDoc) {
   return result;
 }
 
+async function sendCustomerAcceptedSmsForOrder(orderDoc) {
+  const orderRef = orderDoc.ref;
+
+  const lock = await db().runTransaction(async (transaction) => {
+    const snap = await transaction.get(orderRef);
+    if (!snap.exists) return { shouldSend: false };
+
+    const order = snap.data() || {};
+    if (order.customerAcceptedSmsSent === true) {
+      return { shouldSend: false };
+    }
+
+    transaction.set(
+      orderRef,
+      {
+        customerAcceptedSmsLockedAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return {
+      shouldSend: true,
+      order,
+    };
+  });
+
+  if (!lock.shouldSend) return;
+
+  const profile = await getUserProfile(lock.order.userId);
+  const customerName = String(
+    lock.order.customerName || lock.order.fullName || profile.fullName || 'Customer'
+  ).trim();
+  const customerPhone = normalizePhone(
+    lock.order.phone || lock.order.msisdn || profile.phone || ''
+  );
+
+  const smsMessage = buildCustomerAcceptedMessage(lock.order, customerName);
+
+  try {
+    const smsResult = await sendSms({
+      to: customerPhone,
+      message: smsMessage,
+    });
+
+    await orderRef.set(
+      {
+        customerAcceptedSmsSent: !smsResult.skipped,
+        customerAcceptedSmsSentAt: smsResult.skipped
+          ? null
+          : admin.firestore.FieldValue.serverTimestamp(),
+        customerAcceptedSmsStatus: smsResult.skipped ? 'SKIPPED' : 'SENT',
+        customerAcceptedSmsReason: smsResult.reason || '',
+        customerAcceptedSmsProvider: smsResult.provider || '',
+        customerAcceptedSmsProviderMessageId:
+          smsResult.providerMessageId || '',
+        customerAcceptedSmsProviderReference:
+          smsResult.providerReference || '',
+        customerAcceptedSmsResponseRaw: smsResult.raw || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    await orderRef.set(
+      {
+        customerAcceptedSmsSent: false,
+        customerAcceptedSmsStatus: 'FAILED',
+        customerAcceptedSmsReason:
+          error.response?.data?.message || error.message || 'SMS failed',
+        customerAcceptedSmsResponseRaw: error.response?.data || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    console.error(
+      'Customer accepted SMS failed:',
+      error.response?.data || error.message || error
+    );
+  }
+}
+
+async function sendCustomerDeliveredSmsForOrder(orderDoc) {
+  const orderRef = orderDoc.ref;
+
+  const lock = await db().runTransaction(async (transaction) => {
+    const snap = await transaction.get(orderRef);
+    if (!snap.exists) return { shouldSend: false };
+
+    const order = snap.data() || {};
+    if (!isDeliveredStatus(order.status)) {
+      return { shouldSend: false };
+    }
+
+    if (order.customerDeliveredSmsSent === true) {
+      return { shouldSend: false };
+    }
+
+    transaction.set(
+      orderRef,
+      {
+        customerDeliveredSmsLockedAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return {
+      shouldSend: true,
+      order,
+    };
+  });
+
+  if (!lock.shouldSend) return;
+
+  const profile = await getUserProfile(lock.order.userId);
+  const customerName = String(
+    lock.order.customerName || lock.order.fullName || profile.fullName || 'Customer'
+  ).trim();
+  const customerPhone = normalizePhone(
+    lock.order.phone || lock.order.msisdn || profile.phone || ''
+  );
+
+  const smsMessage = buildCustomerDeliveredMessage(lock.order, customerName);
+
+  try {
+    const smsResult = await sendSms({
+      to: customerPhone,
+      message: smsMessage,
+    });
+
+    await orderRef.set(
+      {
+        customerDeliveredSmsSent: !smsResult.skipped,
+        customerDeliveredSmsSentAt: smsResult.skipped
+          ? null
+          : admin.firestore.FieldValue.serverTimestamp(),
+        customerDeliveredSmsStatus: smsResult.skipped ? 'SKIPPED' : 'SENT',
+        customerDeliveredSmsReason: smsResult.reason || '',
+        customerDeliveredSmsProvider: smsResult.provider || '',
+        customerDeliveredSmsProviderMessageId:
+          smsResult.providerMessageId || '',
+        customerDeliveredSmsProviderReference:
+          smsResult.providerReference || '',
+        customerDeliveredSmsResponseRaw: smsResult.raw || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    await orderRef.set(
+      {
+        customerDeliveredSmsSent: false,
+        customerDeliveredSmsStatus: 'FAILED',
+        customerDeliveredSmsReason:
+          error.response?.data?.message || error.message || 'SMS failed',
+        customerDeliveredSmsResponseRaw: error.response?.data || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    console.error(
+      'Customer delivered SMS failed:',
+      error.response?.data || error.message || error
+    );
+  }
+}
+
+async function sendCustomerFundingSms(txDoc) {
+  const txRef = txDoc.ref;
+
+  const lock = await db().runTransaction(async (transaction) => {
+    const snap = await transaction.get(txRef);
+    if (!snap.exists) return { shouldSend: false };
+
+    const txData = snap.data() || {};
+    if (
+      String(txData.type || '').toUpperCase() !== 'CREDIT' ||
+      String(txData.status || '').toUpperCase() !== 'SUCCESS'
+    ) {
+      return { shouldSend: false };
+    }
+
+    if (txData.customerFundingSmsSent === true) {
+      return { shouldSend: false };
+    }
+
+    transaction.set(
+      txRef,
+      {
+        customerFundingSmsLockedAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return {
+      shouldSend: true,
+      txData,
+    };
+  });
+
+  if (!lock.shouldSend) return;
+
+  const txData = lock.txData;
+  const profile = await getUserProfile(txData.userId);
+  const customerName = String(
+    txData.customerName || profile.fullName || 'Customer'
+  ).trim();
+  const customerPhone = normalizePhone(
+    txData.phone || profile.phone || ''
+  );
+
+  const smsMessage = buildCustomerFundingMessage({
+    customerName,
+    amount: Number(txData.amount || 0),
+    balanceAfter: Number(txData.balanceAfter || 0),
+  });
+
+  try {
+    const smsResult = await sendSms({
+      to: customerPhone,
+      message: smsMessage,
+    });
+
+    await txRef.set(
+      {
+        customerFundingSmsSent: !smsResult.skipped,
+        customerFundingSmsSentAt: smsResult.skipped
+          ? null
+          : admin.firestore.FieldValue.serverTimestamp(),
+        customerFundingSmsStatus: smsResult.skipped ? 'SKIPPED' : 'SENT',
+        customerFundingSmsReason: smsResult.reason || '',
+        customerFundingSmsProvider: smsResult.provider || '',
+        customerFundingSmsProviderMessageId:
+          smsResult.providerMessageId || '',
+        customerFundingSmsProviderReference:
+          smsResult.providerReference || '',
+        customerFundingSmsResponseRaw: smsResult.raw || null,
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    await txRef.set(
+      {
+        customerFundingSmsSent: false,
+        customerFundingSmsStatus: 'FAILED',
+        customerFundingSmsReason:
+          error.response?.data?.message || error.message || 'SMS failed',
+        customerFundingSmsResponseRaw: error.response?.data || null,
+      },
+      { merge: true }
+    );
+
+    console.error(
+      'Customer funding SMS failed:',
+      error.response?.data || error.message || error
+    );
+  }
+}
+
 function startAdminOrderNotificationsListener() {
-  if (listenerStarted) return listenerUnsubscribe;
+  if (listenersStarted) {
+    return {
+      ordersUnsubscribe,
+      walletTxUnsubscribe,
+    };
+  }
 
-  let initialSnapshotHandled = false;
+  let initialOrdersSnapshotHandled = false;
+  let initialWalletTxSnapshotHandled = false;
 
-  listenerUnsubscribe = db()
+  ordersUnsubscribe = db()
     .collection('orders')
     .onSnapshot(
       async (snapshot) => {
-        if (!initialSnapshotHandled) {
-          initialSnapshotHandled = true;
+        if (!initialOrdersSnapshotHandled) {
+          initialOrdersSnapshotHandled = true;
           console.log('Admin order notification listener is ready.');
           return;
         }
 
         for (const change of snapshot.docChanges()) {
-          if (change.type !== 'added') continue;
           try {
-            await createAdminNotificationForOrder(change.doc);
+            if (change.type === 'added') {
+              await createAdminNotificationForOrder(change.doc);
+              await sendCustomerAcceptedSmsForOrder(change.doc);
+            }
+
+            if (change.type === 'modified') {
+              await sendCustomerDeliveredSmsForOrder(change.doc);
+            }
           } catch (error) {
             console.error(
-              'Failed to process new order notification:',
+              'Failed to process order notification flow:',
               error.message || error
             );
           }
@@ -367,8 +707,43 @@ function startAdminOrderNotificationsListener() {
       }
     );
 
-  listenerStarted = true;
-  return listenerUnsubscribe;
+  walletTxUnsubscribe = db()
+    .collection('wallet_transactions')
+    .onSnapshot(
+      async (snapshot) => {
+        if (!initialWalletTxSnapshotHandled) {
+          initialWalletTxSnapshotHandled = true;
+          console.log('Wallet transaction SMS listener is ready.');
+          return;
+        }
+
+        for (const change of snapshot.docChanges()) {
+          if (change.type !== 'added') continue;
+
+          try {
+            await sendCustomerFundingSms(change.doc);
+          } catch (error) {
+            console.error(
+              'Failed to process wallet funding SMS:',
+              error.message || error
+            );
+          }
+        }
+      },
+      (error) => {
+        console.error(
+          'Wallet transaction SMS listener error:',
+          error.message || error
+        );
+      }
+    );
+
+  listenersStarted = true;
+
+  return {
+    ordersUnsubscribe,
+    walletTxUnsubscribe,
+  };
 }
 
 module.exports = {
