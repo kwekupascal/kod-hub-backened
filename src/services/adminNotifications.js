@@ -59,22 +59,31 @@ async function sendAdminSms(message) {
   }
 
 if (provider === 'ARKESEL') {
-  const apiKey = process.env.ARKESEL_API_KEY;
-  const sender = process.env.ARKESEL_SENDER_ID || 'KOD HUB';
-  const baseUrl = 'https://sms.arkesel.com/sms/api';
+  const apiKey = String(process.env.ARKESEL_API_KEY || '').trim();
+  const sender = String(process.env.ARKESEL_SENDER_ID || 'KOD HUB').trim();
+  const baseUrl =
+    process.env.ARKESEL_BASE_URL || 'https://sms.arkesel.com/api/v2/sms/send';
 
   if (!apiKey) {
     throw new Error('ARKESEL_API_KEY is missing');
   }
 
-  const url = `${baseUrl}?action=send-sms&api_key=${apiKey}&to=${adminPhone}&from=${encodeURIComponent(sender)}&sms=${encodeURIComponent(message)}`;
+  const response = await axios.post(
+    baseUrl,
+    {
+      sender,
+      message,
+      recipients: [adminPhone],
+    },
+    {
+      headers: {
+        'api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
 
-  const response = await axios.get(url);
-
-  if (!response.data || response.data.status !== 'success') {
-    throw new Error(JSON.stringify(response.data));
-  }
-
+  console.log('Arkesel SMS response:', response.data);
   return { skipped: false, provider: 'ARKESEL' };
 }
 
