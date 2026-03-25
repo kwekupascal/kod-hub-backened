@@ -92,7 +92,7 @@ function buildNotificationPayload(orderId, order = {}) {
 async function sendAdminSms(message) {
   const provider = String(process.env.SMS_PROVIDER || 'NONE').toUpperCase();
   const adminPhone = String(process.env.ADMIN_ALERT_PHONE || '').trim();
-
+}
   if (!adminPhone) {
     return { skipped: true, reason: 'ADMIN_ALERT_PHONE is not configured' };
   }
@@ -124,25 +124,6 @@ if (provider === 'ARKESEL') {
 
   console.log('Arkesel SMS response:', response.data);
   return { skipped: false, provider: 'ARKESEL' };
-}
-
-  const network = String(order.network || '-').trim();
-  const bundle = String(order.value || '-').trim();
-  const phone = String(order.msisdn || order.phone || '-').trim();
-
-  return {
-    title: 'New data order',
-    body: `${network} • ${bundle}`,
-    smsBody: `New data order. ${network}. ${bundle}. ${phone}. ID ${trackingId || '-'}.`,
-    orderType: 'DATA',
-    trackingId,
-    amount: Number(order.amount || 0),
-    phone,
-    customerName: String(order.customerName || '').trim(),
-    status: String(order.status || 'Accepted').trim(),
-    network,
-    bundle,
-  };
 }
 
 function buildCustomerAcceptedMessage(order = {}, customerName) {
