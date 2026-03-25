@@ -45,28 +45,26 @@ async function getUserProfile(userId) {
   };
 }
 
-function buildNotificationPayload(orderId, order = {}) {
+function buildAdminNotificationPayload(orderId, order = {}) {
   const type = String(order.type || 'ORDER').toUpperCase();
   const trackingId = String(order.trackingId || '').trim();
-  const amount = Number(order.amount || 0);
-  const status = String(order.status || 'Accepted').trim();
 
   if (type === 'AFA') {
     const fullName = String(
-      order.fullName || order.customerName || 'Unknown customer'
+      order.fullName || order.customerName || 'Customer'
     ).trim();
     const phone = String(order.phone || order.msisdn || '-').trim();
 
     return {
-      title: 'New AFA order received',
-      body: 'New AFA order received',
-      smsBody: 'New AFA order received',
+      title: 'New AFA order',
+      body: `${fullName} • ${phone}`,
+      smsBody: `New AFA order. ${fullName}. ${phone}. ID ${trackingId || '-'}.`,
       orderType: 'AFA',
       trackingId,
-      amount,
+      amount: Number(order.amount || 0),
       phone,
       customerName: fullName,
-      status,
+      status: String(order.status || 'Accepted').trim(),
     };
   }
 
@@ -75,55 +73,18 @@ function buildNotificationPayload(orderId, order = {}) {
   const phone = String(order.msisdn || order.phone || '-').trim();
 
   return {
-    title: 'New data order received',
-    body: 'New data order received',
-    smsBody: 'New data order received',
+    title: 'New data order',
+    body: `${network} • ${bundle}`,
+    smsBody: `New data order. ${network}. ${bundle}. ${phone}. ID ${trackingId || '-'}.`,
     orderType: 'DATA',
     trackingId,
-    amount,
+    amount: Number(order.amount || 0),
     phone,
     customerName: String(order.customerName || '').trim(),
-    status,
+    status: String(order.status || 'Accepted').trim(),
     network,
     bundle,
   };
-}
-
-async function sendAdminSms(message) {
-  const provider = String(process.env.SMS_PROVIDER || 'NONE').toUpperCase();
-  const adminPhone = String(process.env.ADMIN_ALERT_PHONE || '').trim();
-}
-  if (!adminPhone) {
-    return { skipped: true, reason: 'ADMIN_ALERT_PHONE is not configured' };
-  }
-
-if (provider === 'ARKESEL') {
-  const apiKey = String(process.env.ARKESEL_API_KEY || '').trim();
-  const sender = String(process.env.ARKESEL_SENDER_ID || 'KOD HUB').trim();
-  const baseUrl =
-    process.env.ARKESEL_BASE_URL || 'https://sms.arkesel.com/api/v2/sms/send';
-
-  if (!apiKey) {
-    throw new Error('ARKESEL_API_KEY is missing');
-  }
-
-  const response = await axios.post(
-    baseUrl,
-    {
-      sender,
-      message,
-      recipients: [adminPhone],
-    },
-    {
-      headers: {
-        'api-key': apiKey,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-
-  console.log('Arkesel SMS response:', response.data);
-  return { skipped: false, provider: 'ARKESEL' };
 }
 
 function buildCustomerAcceptedMessage(order = {}, customerName) {
