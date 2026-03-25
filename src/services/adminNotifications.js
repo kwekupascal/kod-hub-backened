@@ -50,38 +50,31 @@ function buildAdminNotificationPayload(orderId, order = {}) {
   const trackingId = String(order.trackingId || '').trim();
 
   if (type === 'AFA') {
-    const fullName = String(
-      order.fullName || order.customerName || 'Customer'
-    ).trim();
-
     return {
       title: 'New AFA order',
-      body: fullName,
-      smsBody: `AFA order. ID ${trackingId || '-'}.`,
+      body: 'New AFA order',
+      smsBody: `AFA ID ${trackingId || '-'}`,
       orderType: 'AFA',
       trackingId,
       amount: Number(order.amount || 0),
       phone: '',
-      customerName: fullName,
+      customerName: '',
       status: String(order.status || 'Accepted').trim(),
     };
   }
 
-  const network = String(order.network || '-').trim();
-  const bundle = String(order.value || '-').trim();
-
   return {
     title: 'New data order',
-    body: `${network} ${bundle}`,
-    smsBody: `Data order. ${network} ${bundle}. ID ${trackingId || '-'}.`,
+    body: 'New data order',
+    smsBody: `DATA ID ${trackingId || '-'}`,
     orderType: 'DATA',
     trackingId,
     amount: Number(order.amount || 0),
     phone: '',
-    customerName: String(order.customerName || '').trim(),
+    customerName: '',
     status: String(order.status || 'Accepted').trim(),
-    network,
-    bundle,
+    network: '',
+    bundle: '',
   };
 }
 
