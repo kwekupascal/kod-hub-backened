@@ -12,19 +12,22 @@ function money(value) {
 function buildNotificationPayload(orderId, order = {}) {
   const type = String(order.type || 'ORDER').toUpperCase();
   const trackingId = String(order.trackingId || '').trim();
-  const amount = `GHS ${money(order.amount)}`;
+  const amount = Number(order.amount || 0);
   const status = String(order.status || 'Accepted').trim();
 
   if (type === 'AFA') {
-    const fullName = String(order.fullName || order.customerName || 'Unknown customer').trim();
+    const fullName = String(
+      order.fullName || order.customerName || 'Unknown customer'
+    ).trim();
     const phone = String(order.phone || order.msisdn || '-').trim();
+
     return {
       title: 'New AFA order received',
-      body: `${fullName} • ${phone} • ${amount}`,
-      smsBody: `KOD HUB ALERT: New AFA order from ${fullName}. Phone: ${phone}. Amount: ${amount}. Tracking ID: ${trackingId || '-'} . Status: ${status}.`,
+      body: 'New AFA order received',
+      smsBody: 'New AFA order received',
       orderType: 'AFA',
       trackingId,
-      amount: Number(order.amount || 0),
+      amount,
       phone,
       customerName: fullName,
       status,
@@ -37,11 +40,11 @@ function buildNotificationPayload(orderId, order = {}) {
 
   return {
     title: 'New data order received',
-    body: `${network} • ${bundle} • ${amount}`,
-    smsBody: `KOD HUB ALERT: New DATA order. Network: ${network}. Bundle: ${bundle}. Phone: ${phone}. Amount: ${amount}. Tracking ID: ${trackingId || '-'} . Status: ${status}.`,
+    body: 'New data order received',
+    smsBody: 'New data order received',
     orderType: 'DATA',
     trackingId,
-    amount: Number(order.amount || 0),
+    amount,
     phone,
     customerName: String(order.customerName || '').trim(),
     status,
