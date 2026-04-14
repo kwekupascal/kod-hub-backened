@@ -38,8 +38,39 @@ function verifyWebhookSignature(req) {
   const secret = process.env.PAYSTACK_SECRET_KEY || '';
   const signature = req.headers['x-paystack-signature'];
   if (!secret || !signature) return false;
-  const hash = crypto.createHmac('sha512', secret).update(JSON.stringify(req.body)).digest('hex');
+  const hash = crypto
+    .createHmac('sha512', secret)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
   return hash === signature;
+}
+
+function getFrontendFlow(paymentType) {
+  switch (paymentType) {
+    case 'WALLET_FUNDING':
+      return 'wallet';
+    case 'DATA_PURCHASE':
+      return 'data';
+    case 'AFA_PURCHASE':
+      return 'afa';
+    default:
+      return 'home';
+  }
+}
+
+function buildFrontendReturnUrl({ paymentId, paymentType, status }) {
+  const webAppUrl = (process.env.WEB_APP_URL || '').trim();
+  if (!webAppUrl) return '';
+
+  const flow = getFrontendFlow(paymentType);
+  const url = new URL(webAppUrl);
+  url.searchParams.set('paystack_return', '1');
+  url.searchParams.set('flow', flow);
+  url.searchParams.set('paymentId', paymentId);
+  if (status) {
+    url.searchParams.set('status', status);
+  }
+  return url.toString();
 }
 
 async function createDataOrderIfNeeded({ paymentId }) {
@@ -152,22 +183,35 @@ router.post('/webhook/paystack', async (req, res) => {
     const reference = event.data?.reference;
     if (!reference) return;
 
-    const paymentsQuery = await db().collection('payments').where('clientReference', '==', reference).limit(1).get();
+    const paymentsQuery = await db()
+      .collection('payments')
+      .where('clientReference', '==', reference)
+      .limit(1)
+      .get();
+
     if (paymentsQuery.empty) return;
 
     const paymentId = paymentsQuery.docs[0].id;
     const verification = await verifyPaystackPayment({ reference });
 
-    await db().collection('payments').doc(paymentId).set({
-      providerReference: verification.providerReference || reference,
-      providerTransactionId: verification.providerTransactionId || '',
-      status: verification.status,
-      message: verification.message || '',
-      failureReason: verification.status === 'FAILED' ? (verification.message || 'Payment failed') : '',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await db().collection('payments').doc(paymentId).set(
+      {
+        providerReference: verification.providerReference || reference,
+        providerTransactionId: verification.providerTransactionId || '',
+        status: verification.status,
+        message: verification.message || '',
+        failureReason:
+          verification.status === 'FAILED'
+            ? verification.message || 'Payment failed'
+            : '',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
-    if (verification.status === 'SUCCESS') await processSuccessfulPayment({ paymentId });
+    if (verification.status === 'SUCCESS') {
+      await processSuccessfulPayment({ paymentId });
+    }
   } catch (error) {
     console.error('Webhook handling failed:', error.response?.data || error);
   }
@@ -193,7 +237,7 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
     await ensureWallet({
       userId,
       email: userRecord.email || '',
-      displayName: userRecord.displayName || ''
+      displayName: userRecord.displayName || '',
     });
 
     const paymentRef = db().collection('payments').doc();
@@ -224,11 +268,13 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
       message: 'Payment initialized.',
       trackingId,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const callbackBase = process.env.APP_BASE_URL || '';
-    const callbackUrl = callbackBase ? `${callbackBase}/api/payments/${paymentRef.id}/callback` : undefined;
+    const callbackBase = (process.env.APP_BASE_URL || '').trim();
+    const callbackUrl = callbackBase
+      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
+      : undefined;
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
@@ -244,18 +290,21 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
         paymentChannel: 'mobile_money',
         baseAmount,
         chargeAmount,
-        payableAmount: totalPayableAmount
-      }
+        payableAmount: totalPayableAmount,
+      },
     });
 
-    await paymentRef.set({
-      providerReference: paystackResponse.providerReference || clientReference,
-      authorizationUrl: paystackResponse.authorizationUrl || '',
-      accessCode: paystackResponse.accessCode || '',
-      status: paystackResponse.status || 'PENDING',
-      message: paystackResponse.message || 'Payment initialized successfully.',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await paymentRef.set(
+      {
+        providerReference: paystackResponse.providerReference || clientReference,
+        authorizationUrl: paystackResponse.authorizationUrl || '',
+        accessCode: paystackResponse.accessCode || '',
+        status: paystackResponse.status || 'PENDING',
+        message: paystackResponse.message || 'Payment initialized successfully.',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     return res.json({
       ok: true,
@@ -267,13 +316,16 @@ router.post('/wallet/initiate', requireFirebaseUser, async (req, res) => {
       payableAmount: totalPayableAmount,
       authorizationUrl: paystackResponse.authorizationUrl || '',
       accessCode: paystackResponse.accessCode || '',
-      message: paystackResponse.message || 'Payment initialized successfully.'
+      message: paystackResponse.message || 'Payment initialized successfully.',
     });
   } catch (error) {
     console.error('Wallet initiate failed:', error.response?.data || error);
     return res.status(500).json({
       ok: false,
-      message: error.response?.data?.message || error.message || 'Failed to initiate wallet payment'
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to initiate wallet payment',
     });
   }
 });
@@ -332,11 +384,13 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
       message: 'Data payment initialized.',
       trackingId,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const callbackBase = process.env.APP_BASE_URL || '';
-    const callbackUrl = callbackBase ? `${callbackBase}/api/payments/${paymentRef.id}/callback` : undefined;
+    const callbackBase = (process.env.APP_BASE_URL || '').trim();
+    const callbackUrl = callbackBase
+      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
+      : undefined;
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
@@ -356,18 +410,21 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
         paymentChannel: 'mobile_money',
         baseAmount,
         chargeAmount,
-        payableAmount: totalPayableAmount
-      }
+        payableAmount: totalPayableAmount,
+      },
     });
 
-    await paymentRef.set({
-      providerReference: paystackResponse.providerReference || clientReference,
-      authorizationUrl: paystackResponse.authorizationUrl || '',
-      accessCode: paystackResponse.accessCode || '',
-      status: paystackResponse.status || 'PENDING',
-      message: 'Authorization URL created',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await paymentRef.set(
+      {
+        providerReference: paystackResponse.providerReference || clientReference,
+        authorizationUrl: paystackResponse.authorizationUrl || '',
+        accessCode: paystackResponse.accessCode || '',
+        status: paystackResponse.status || 'PENDING',
+        message: 'Authorization URL created',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     return res.json({
       ok: true,
@@ -379,13 +436,16 @@ router.post('/data/initiate', requireFirebaseUser, async (req, res) => {
       payableAmount: totalPayableAmount,
       authorizationUrl: paystackResponse.authorizationUrl || '',
       accessCode: paystackResponse.accessCode || '',
-      message: 'Authorization URL created'
+      message: 'Authorization URL created',
     });
   } catch (error) {
     console.error('Data initiate failed:', error.response?.data || error);
     return res.status(500).json({
       ok: false,
-      message: error.response?.data?.message || error.message || 'Failed to initialize data payment'
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to initialize data payment',
     });
   }
 });
@@ -445,11 +505,13 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
       message: 'AFA payment initialized.',
       trackingId,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const callbackBase = process.env.APP_BASE_URL || '';
-    const callbackUrl = callbackBase ? `${callbackBase}/api/payments/${paymentRef.id}/callback` : undefined;
+    const callbackBase = (process.env.APP_BASE_URL || '').trim();
+    const callbackUrl = callbackBase
+      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
+      : undefined;
 
     const paystackResponse = await initializePaystackWalletCharge({
       email: userRecord.email,
@@ -469,18 +531,21 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
         paymentChannel: 'mobile_money',
         baseAmount,
         chargeAmount,
-        payableAmount: totalPayableAmount
-      }
+        payableAmount: totalPayableAmount,
+      },
     });
 
-    await paymentRef.set({
-      providerReference: paystackResponse.providerReference || clientReference,
-      authorizationUrl: paystackResponse.authorizationUrl || '',
-      accessCode: paystackResponse.accessCode || '',
-      status: paystackResponse.status || 'PENDING',
-      message: 'Authorization URL created',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await paymentRef.set(
+      {
+        providerReference: paystackResponse.providerReference || clientReference,
+        authorizationUrl: paystackResponse.authorizationUrl || '',
+        accessCode: paystackResponse.accessCode || '',
+        status: paystackResponse.status || 'PENDING',
+        message: 'Authorization URL created',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
     return res.json({
       ok: true,
@@ -492,13 +557,16 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
       payableAmount: totalPayableAmount,
       authorizationUrl: paystackResponse.authorizationUrl || '',
       accessCode: paystackResponse.accessCode || '',
-      message: 'Authorization URL created'
+      message: 'Authorization URL created',
     });
   } catch (error) {
     console.error('AFA initiate failed:', error.response?.data || error);
     return res.status(500).json({
       ok: false,
-      message: error.response?.data?.message || error.message || 'Failed to initialize AFA payment'
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to initialize AFA payment',
     });
   }
 });
@@ -508,49 +576,117 @@ router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
     const paymentId = req.params.paymentId;
     const paymentRef = db().collection('payments').doc(paymentId);
     const paymentSnap = await paymentRef.get();
-    if (!paymentSnap.exists) return res.status(404).json({ ok: false, message: 'Payment not found' });
+    if (!paymentSnap.exists) {
+      return res.status(404).json({ ok: false, message: 'Payment not found' });
+    }
 
     const payment = paymentSnap.data();
     if (payment.userId !== req.user.uid) {
       return res.status(403).json({ ok: false, message: 'Forbidden' });
     }
 
-    const verification = await verifyPaystackPayment({ reference: payment.clientReference });
+    const verification = await verifyPaystackPayment({
+      reference: payment.clientReference,
+    });
 
-    await paymentRef.set({
-      providerReference: verification.providerReference || payment.clientReference,
-      providerTransactionId: verification.providerTransactionId || '',
-      status: verification.status,
-      message: verification.message || '',
-      failureReason: verification.status === 'FAILED' ? (verification.message || 'Payment failed') : '',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    await paymentRef.set(
+      {
+        providerReference: verification.providerReference || payment.clientReference,
+        providerTransactionId: verification.providerTransactionId || '',
+        status: verification.status,
+        message: verification.message || '',
+        failureReason:
+          verification.status === 'FAILED'
+            ? verification.message || 'Payment failed'
+            : '',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
 
-    if (verification.status === 'SUCCESS') await processSuccessfulPayment({ paymentId });
+    if (verification.status === 'SUCCESS') {
+      await processSuccessfulPayment({ paymentId });
+    }
 
     const fresh = (await paymentRef.get()).data();
     let message = fresh.message || '';
-    if (fresh.status === 'SUCCESS' && fresh.type === 'DATA_PURCHASE') message = 'Order placed successfully.';
-    else if (fresh.status === 'SUCCESS' && fresh.type === 'AFA_PURCHASE') message = 'AFA request submitted successfully.';
+    if (fresh.status === 'SUCCESS' && fresh.type === 'DATA_PURCHASE') {
+      message = 'Order placed successfully.';
+    } else if (fresh.status === 'SUCCESS' && fresh.type === 'AFA_PURCHASE') {
+      message = 'AFA request submitted successfully.';
+    }
 
     return res.json({
       ok: true,
       paymentId: fresh.paymentId,
       status: fresh.status,
       walletCreditApplied: fresh.walletCreditApplied === true,
-      message
+      message,
     });
   } catch (error) {
     console.error('Get payment status failed:', error.response?.data || error);
     return res.status(500).json({
       ok: false,
-      message: error.response?.data?.message || error.message || 'Failed to get payment status'
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to get payment status',
     });
   }
 });
 
 router.get('/:paymentId/callback', async (req, res) => {
-  return res.send('Payment callback received. Return to the app.');
+  try {
+    const paymentId = req.params.paymentId;
+    const paymentRef = db().collection('payments').doc(paymentId);
+    const paymentSnap = await paymentRef.get();
+
+    if (!paymentSnap.exists) {
+      return res.status(404).send('Payment not found.');
+    }
+
+    const payment = paymentSnap.data();
+
+    const verification = await verifyPaystackPayment({
+      reference: payment.clientReference,
+    });
+
+    await paymentRef.set(
+      {
+        providerReference: verification.providerReference || payment.clientReference,
+        providerTransactionId: verification.providerTransactionId || '',
+        status: verification.status,
+        message: verification.message || '',
+        failureReason:
+          verification.status === 'FAILED'
+            ? verification.message || 'Payment failed'
+            : '',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    if (verification.status === 'SUCCESS') {
+      await processSuccessfulPayment({ paymentId });
+    }
+
+    const redirectUrl = buildFrontendReturnUrl({
+      paymentId,
+      paymentType: payment.type,
+      status: verification.status || payment.status || 'PENDING',
+    });
+
+    if (!redirectUrl) {
+      return res
+        .status(500)
+        .send('WEB_APP_URL is not configured on the server.');
+    }
+
+    return res.redirect(302, redirectUrl);
+  } catch (error) {
+    console.error('Payment callback failed:', error.response?.data || error);
+    return res.status(500).send('Failed to process payment callback.');
+  }
 });
 
 module.exports = router;
