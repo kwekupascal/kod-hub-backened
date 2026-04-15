@@ -25,6 +25,14 @@ app.get('/', (req, res) => {
   });
 });
 
+app.get('/__render-check', (req, res) => {
+  res.json({
+    ok: true,
+    message: 'Render is serving the latest src backend build',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use('/api/payments', paymentsRouter);
 app.use('/api/webhooks', webhooksRouter);
 

@@ -62,14 +62,17 @@ function buildFrontendReturnUrl({ paymentId, paymentType, status }) {
   const webAppUrl = (process.env.WEB_APP_URL || '').trim();
   if (!webAppUrl) return '';
 
+  const normalizedBase = webAppUrl.replace(/\/+$/, '');
   const flow = getFrontendFlow(paymentType);
-  const url = new URL(webAppUrl);
+  const url = new URL(`${normalizedBase}/`);
+
   url.searchParams.set('paystack_return', '1');
   url.searchParams.set('flow', flow);
   url.searchParams.set('paymentId', paymentId);
   if (status) {
     url.searchParams.set('status', status);
   }
+
   return url.toString();
 }
 
@@ -636,6 +639,8 @@ router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
 });
 
 router.get('/:paymentId/callback', async (req, res) => {
+  console.log('CALLBACK ROUTE HIT', req.params.paymentId, req.query);
+
   try {
     const paymentId = req.params.paymentId;
     const paymentRef = db().collection('payments').doc(paymentId);
@@ -647,8 +652,23 @@ router.get('/:paymentId/callback', async (req, res) => {
 
     const payment = paymentSnap.data();
 
+    console.log('[PAYSTACK CALLBACK] payment loaded', {
+      paymentId,
+      clientReference: payment.clientReference,
+      paymentType: payment.type,
+      webAppUrl: process.env.WEB_APP_URL || '',
+    });
+
     const verification = await verifyPaystackPayment({
       reference: payment.clientReference,
+    });
+
+    console.log('[PAYSTACK CALLBACK] verification result', {
+      paymentId,
+      status: verification.status,
+      providerReference: verification.providerReference,
+      providerTransactionId: verification.providerTransactionId,
+      message: verification.message,
     });
 
     await paymentRef.set(
@@ -670,10 +690,18 @@ router.get('/:paymentId/callback', async (req, res) => {
       await processSuccessfulPayment({ paymentId });
     }
 
+    const freshPaymentSnap = await paymentRef.get();
+    const freshPayment = freshPaymentSnap.data() || payment;
+
     const redirectUrl = buildFrontendReturnUrl({
       paymentId,
-      paymentType: payment.type,
-      status: verification.status || payment.status || 'PENDING',
+      paymentType: freshPayment.type,
+      status: freshPayment.status || verification.status || 'PENDING',
+    });
+
+    console.log('[PAYSTACK CALLBACK] redirecting', {
+      paymentId,
+      redirectUrl,
     });
 
     if (!redirectUrl) {
@@ -684,7 +712,10 @@ router.get('/:paymentId/callback', async (req, res) => {
 
     return res.redirect(302, redirectUrl);
   } catch (error) {
-    console.error('Payment callback failed:', error.response?.data || error);
+    console.error(
+      '[PAYSTACK CALLBACK] failed',
+      error.response?.data || error.message || error
+    );
     return res.status(500).send('Failed to process payment callback.');
   }
 });
