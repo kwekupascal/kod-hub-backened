@@ -693,24 +693,40 @@ router.get('/:paymentId/callback', async (req, res) => {
     const freshPaymentSnap = await paymentRef.get();
     const freshPayment = freshPaymentSnap.data() || payment;
 
-    const redirectUrl = buildFrontendReturnUrl({
-      paymentId,
-      paymentType: freshPayment.type,
-      status: freshPayment.status || verification.status || 'PENDING',
-    });
+const redirectUrl = buildFrontendReturnUrl({
+  paymentId,
+  paymentType: freshPayment.type,
+  status: freshPayment.status || verification.status || 'PENDING',
+});
 
-    console.log('[PAYSTACK CALLBACK] redirecting', {
-      paymentId,
-      redirectUrl,
-    });
+console.log('[PAYSTACK CALLBACK] redirecting', {
+  paymentId,
+  redirectUrl,
+});
 
-    if (!redirectUrl) {
-      return res
-        .status(500)
-        .send('WEB_APP_URL is not configured on the server.');
-    }
+if (!redirectUrl) {
+  return res
+    .status(500)
+    .send('WEB_APP_URL is not configured on the server.');
+}
 
-    return res.redirect(302, redirectUrl);
+return res.status(200).send(`
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content="0;url=${redirectUrl}" />
+    <title>Redirecting...</title>
+    <script>
+      window.location.replace(${JSON.stringify(redirectUrl)});
+    </script>
+  </head>
+  <body>
+    <p>Redirecting back to KOD HUB...</p>
+    <p><a href="${redirectUrl}">Tap here if you are not redirected</a></p>
+  </body>
+</html>
+`);
   } catch (error) {
     console.error(
       '[PAYSTACK CALLBACK] failed',
