@@ -632,9 +632,9 @@ router.post('/agent-registration/initiate', requireFirebaseUser, async (req, res
       });
     }
 
-    const agentFee = 1.00;
+    const agentFee = 100.00;
     const chargeAmount = 0.00;
-    const totalPayableAmount = 1.00;
+    const totalPayableAmount = 100.00;
 
     const cleanPhone = String(phoneNumber || '').replace(/[^0-9]/g, '');
 
