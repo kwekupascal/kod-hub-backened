@@ -53,6 +53,8 @@ function getFrontendFlow(paymentType) {
       return 'data';
     case 'AFA_PURCHASE':
       return 'afa';
+       case 'AGENT_REGISTRATION':
+      return 'agent_registration';
     default:
       return 'home';
   }
@@ -162,6 +164,48 @@ async function createAfaOrderIfNeeded({ paymentId }) {
   });
 }
 
+async function activateAgentIfNeeded({ paymentId }) {
+  const paymentRef = db().collection('payments').doc(paymentId);
+
+  await db().runTransaction(async (transaction) => {
+    const paymentSnap = await transaction.get(paymentRef);
+    if (!paymentSnap.exists) return;
+
+    const payment = paymentSnap.data();
+
+    if (
+      payment.type !== 'AGENT_REGISTRATION' ||
+      payment.agentActivated === true
+    ) {
+      return;
+    }
+
+    const userRef = db().collection('users').doc(payment.userId);
+
+    transaction.set(
+      userRef,
+      {
+        role: 'agent',
+        isAgent: true,
+        accountType: 'agent',
+        agentPaymentStatus: 'paid',
+        agentRegistrationFee: payment.amount || 100,
+        agentPaymentId: paymentId,
+        agentPaymentReference:
+          payment.providerReference || payment.clientReference || '',
+        agentActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    transaction.update(paymentRef, {
+      agentActivated: true,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  });
+}
+
 async function processSuccessfulPayment({ paymentId }) {
   const paymentRef = db().collection('payments').doc(paymentId);
   const paymentSnap = await paymentRef.get();
@@ -173,6 +217,9 @@ async function processSuccessfulPayment({ paymentId }) {
   }
   if (payment.type === 'DATA_PURCHASE') await createDataOrderIfNeeded({ paymentId });
   if (payment.type === 'AFA_PURCHASE') await createAfaOrderIfNeeded({ paymentId });
+  if (payment.type === 'AGENT_REGISTRATION') {
+  await activateAgentIfNeeded({ paymentId });
+}
 }
 
 router.post('/webhook/paystack', async (req, res) => {
@@ -574,6 +621,128 @@ router.post('/afa/initiate', requireFirebaseUser, async (req, res) => {
   }
 });
 
+router.post('/agent-registration/initiate', requireFirebaseUser, async (req, res) => {
+  try {
+    const { userId, fullName, phoneNumber } = req.body;
+
+    if (!userId || req.user.uid !== userId) {
+      return res.status(403).json({
+        ok: false,
+        message: 'User mismatch',
+      });
+    }
+
+    const agentFee = 100.00;
+    const chargeAmount = 0.00;
+    const totalPayableAmount = 100.00;
+
+    const cleanPhone = String(phoneNumber || '').replace(/[^0-9]/g, '');
+
+    if (!/^[0-9]{10,15}$/.test(cleanPhone)) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Invalid phone number',
+      });
+    }
+
+    const userRecord = await admin.auth().getUser(userId);
+
+    const paymentRef = db().collection('payments').doc();
+    const clientReference = generateClientReference('AGENT');
+    const trackingId = generateTrackingId();
+
+    await paymentRef.set({
+      paymentId: paymentRef.id,
+      userId,
+      type: 'AGENT_REGISTRATION',
+      provider: 'PAYSTACK',
+      amount: agentFee,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
+      currency: 'GHS',
+      customerName: String(fullName || userRecord.displayName || '').trim(),
+      customerEmail: userRecord.email || '',
+      phoneNumber: cleanPhone,
+      network: '',
+      clientReference,
+      providerReference: '',
+      providerTransactionId: '',
+      authorizationUrl: '',
+      accessCode: '',
+      status: 'INITIATED',
+      agentActivated: false,
+      failureReason: '',
+      message: 'Agent registration payment initialized.',
+      trackingId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const callbackBase = (process.env.APP_BASE_URL || '').trim();
+    const callbackUrl = callbackBase
+      ? `${callbackBase}/api/payments/${paymentRef.id}/callback`
+      : undefined;
+
+    const paystackResponse = await initializePaystackWalletCharge({
+      email: userRecord.email,
+      amount: totalPayableAmount,
+      clientReference,
+      callbackUrl,
+      channels: ['mobile_money'],
+      metadata: {
+        userId,
+        paymentId: paymentRef.id,
+        type: 'AGENT_REGISTRATION',
+        fullName: String(fullName || '').trim(),
+        phoneNumber: cleanPhone,
+        trackingId,
+        paymentChannel: 'mobile_money',
+        baseAmount: agentFee,
+        chargeAmount,
+        payableAmount: totalPayableAmount,
+      },
+    });
+
+    await paymentRef.set(
+      {
+        providerReference: paystackResponse.providerReference || clientReference,
+        authorizationUrl: paystackResponse.authorizationUrl || '',
+        accessCode: paystackResponse.accessCode || '',
+        status: paystackResponse.status || 'PENDING',
+        message: 'Agent registration payment URL created',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    return res.json({
+      ok: true,
+      paymentId: paymentRef.id,
+      status: paystackResponse.status || 'PENDING',
+      clientReference,
+      amount: agentFee,
+      chargeAmount,
+      payableAmount: totalPayableAmount,
+      authorizationUrl: paystackResponse.authorizationUrl || '',
+      accessCode: paystackResponse.accessCode || '',
+      message: 'Agent registration payment URL created',
+    });
+  } catch (error) {
+    console.error(
+      'Agent registration initiate failed:',
+      error.response?.data || error
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message:
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to initialize agent registration payment',
+    });
+  }
+});
+
 router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
   try {
     const paymentId = req.params.paymentId;
@@ -613,11 +782,13 @@ router.get('/:paymentId/status', requireFirebaseUser, async (req, res) => {
 
     const fresh = (await paymentRef.get()).data();
     let message = fresh.message || '';
-    if (fresh.status === 'SUCCESS' && fresh.type === 'DATA_PURCHASE') {
-      message = 'Order placed successfully.';
-    } else if (fresh.status === 'SUCCESS' && fresh.type === 'AFA_PURCHASE') {
-      message = 'AFA request submitted successfully.';
-    }
+  if (fresh.status === 'SUCCESS' && fresh.type === 'DATA_PURCHASE') {
+  message = 'Order placed successfully.';
+} else if (fresh.status === 'SUCCESS' && fresh.type === 'AFA_PURCHASE') {
+  message = 'AFA request submitted successfully.';
+} else if (fresh.status === 'SUCCESS' && fresh.type === 'AGENT_REGISTRATION') {
+  message = 'Agent registration successful.';
+}
 
     return res.json({
       ok: true,
